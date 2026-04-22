@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const crypto = require("crypto");
 
 const app = express();
 
@@ -11,13 +12,85 @@ const {
   PORT
 } = process.env;
 
-function getZaloAuthUrl() {
-  return `https://oauth.zaloapp.com/v4/permission?app_id=${ZALO_APP_ID}&redirect_uri=${encodeURIComponent(
-    ZALO_REDIRECT_URI
-  )}`;
+function parseCookies(req) {
+  const cookieHeader = req.headers.cookie;
+
+  if (!cookieHeader) {
+    return {};
+  }
+
+  return cookieHeader.split(";").reduce((cookies, item) => {
+    const [rawName, ...rawValue] = item.trim().split("=");
+    cookies[rawName] = decodeURIComponent(rawValue.join("="));
+    return cookies;
+  }, {});
 }
 
-async function exchangeToken(code) {
+function createState() {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function createCodeVerifier() {
+  const uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const lowercase = "abcdefghijklmnopqrstuvwxyz";
+  const numbers = "0123456789";
+  const allChars = uppercase + lowercase + numbers;
+
+  const requiredChars = [
+    uppercase[crypto.randomInt(uppercase.length)],
+    lowercase[crypto.randomInt(lowercase.length)],
+    numbers[crypto.randomInt(numbers.length)]
+  ];
+
+  while (requiredChars.length < 43) {
+    requiredChars.push(allChars[crypto.randomInt(allChars.length)]);
+  }
+
+  for (let index = requiredChars.length - 1; index > 0; index -= 1) {
+    const swapIndex = crypto.randomInt(index + 1);
+    const current = requiredChars[index];
+    requiredChars[index] = requiredChars[swapIndex];
+    requiredChars[swapIndex] = current;
+  }
+
+  return requiredChars.join("");
+}
+
+function createCodeChallenge(codeVerifier) {
+  return crypto
+    .createHash("sha256")
+    .update(codeVerifier, "ascii")
+    .digest("base64url");
+}
+
+function getZaloAuthUrl(state, codeChallenge) {
+  return `https://oauth.zaloapp.com/v4/permission?app_id=${ZALO_APP_ID}&redirect_uri=${encodeURIComponent(
+    ZALO_REDIRECT_URI
+  )}&code_challenge=${encodeURIComponent(codeChallenge)}&state=${encodeURIComponent(state)}`;
+}
+
+function setOauthCookies(res, state, codeVerifier) {
+  const cookieOptions = [
+    "HttpOnly",
+    "Path=/",
+    "Max-Age=600",
+    "SameSite=Lax"
+  ];
+
+  res.setHeader("Set-Cookie", [
+    `zalo_oauth_state=${encodeURIComponent(state)}; ${cookieOptions.join("; ")}`,
+    `zalo_code_verifier=${encodeURIComponent(codeVerifier)}; ${cookieOptions.join("; ")}`
+  ]);
+}
+
+function clearOauthCookies(res) {
+  res.setHeader("Set-Cookie", [
+    "zalo_oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax",
+    "zalo_code_verifier=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
+  ]);
+}
+
+async function exchangeToken(code, codeVerifier) {
   const response = await axios.post(
     "https://oauth.zaloapp.com/v4/access_token",
     null,
@@ -26,6 +99,7 @@ async function exchangeToken(code) {
         app_id: ZALO_APP_ID,
         app_secret: ZALO_APP_SECRET,
         code,
+        code_verifier: codeVerifier,
         grant_type: "authorization_code"
       }
     }
@@ -194,6 +268,10 @@ function renderTestPage() {
             <div class="label">ZALO_REDIRECT_URI</div>
             <div class="value ${hasRedirectUri ? "ok" : "warn"}">${hasRedirectUri || "Missing"}</div>
           </div>
+          <div class="item">
+            <div class="label">OAuth Flow</div>
+            <div class="value ok">state + PKCE enabled</div>
+          </div>
         </div>
 
         <div class="actions">
@@ -224,11 +302,19 @@ app.get("/zalo/auth", (req, res) => {
     });
   }
 
-  const authUrl = getZaloAuthUrl();
+  const state = createState();
+  const codeVerifier = createCodeVerifier();
+  const codeChallenge = createCodeChallenge(codeVerifier);
+  const authUrl = getZaloAuthUrl(state, codeChallenge);
+
+  setOauthCookies(res, state, codeVerifier);
 
   console.log("[ZALO AUTH] Request received", {
     appId: ZALO_APP_ID,
     redirectUri: ZALO_REDIRECT_URI,
+    state,
+    codeVerifier,
+    codeChallenge,
     authUrl
   });
 
@@ -239,11 +325,33 @@ app.get("/zalo/auth", (req, res) => {
  * STEP 2: Callback → exchange code for access token
  */
 app.get("/zalo/callback", async (req, res) => {
-  const code = req.query.code;
+  const { code, state } = req.query;
+  const cookies = parseCookies(req);
+  const savedState = cookies.zalo_oauth_state;
+  const codeVerifier = cookies.zalo_code_verifier;
 
   if (!code) {
     return res.status(400).json({
       message: "Missing code from Zalo callback"
+    });
+  }
+
+  if (!state) {
+    return res.status(400).json({
+      message: "Missing state from Zalo callback"
+    });
+  }
+
+  if (!savedState || !codeVerifier) {
+    return res.status(400).json({
+      message: "Missing OAuth session. Please start again from /zalo/auth"
+    });
+  }
+
+  if (state !== savedState) {
+    clearOauthCookies(res);
+    return res.status(400).json({
+      message: "Invalid state"
     });
   }
 
@@ -254,9 +362,15 @@ app.get("/zalo/callback", async (req, res) => {
       });
     }
 
-    const token = await exchangeToken(code);
+    const token = await exchangeToken(code, codeVerifier);
+
+    clearOauthCookies(res);
 
     console.log("ZALO CALLBACK QUERY:", req.query);
+    console.log("ZALO CALLBACK SESSION:", {
+      savedState,
+      codeVerifier
+    });
     console.log("ZALO TOKEN RESPONSE:", token);
 
     res.json({
@@ -290,7 +404,7 @@ app.listen(PORT, () => {
   console.log("[BOOT] Zalo config", {
     appId: ZALO_APP_ID,
     redirectUri: ZALO_REDIRECT_URI,
-    authUrl: ZALO_APP_ID && ZALO_REDIRECT_URI ? getZaloAuthUrl() : null
+    pkceEnabled: true
   });
   console.log(`Server running at http://localhost:${PORT}`);
 });
