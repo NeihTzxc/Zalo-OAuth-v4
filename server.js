@@ -12,6 +12,18 @@ const {
   PORT
 } = process.env;
 
+function maskSecret(secret) {
+  if (!secret) {
+    return null;
+  }
+
+  if (secret.length <= 8) {
+    return `${secret.slice(0, 2)}...${secret.slice(-2)}`;
+  }
+
+  return `${secret.slice(0, 4)}...${secret.slice(-4)}`;
+}
+
 function parseCookies(req) {
   const cookieHeader = req.headers.cookie;
 
@@ -362,6 +374,12 @@ app.get("/zalo/callback", async (req, res) => {
       });
     }
 
+    console.log("[ZALO TOKEN] Using credentials", {
+      appId: ZALO_APP_ID,
+      secretLength: ZALO_APP_SECRET.length,
+      secretPreview: maskSecret(ZALO_APP_SECRET)
+    });
+
     const token = await exchangeToken(code, codeVerifier);
 
     clearOauthCookies(res);
@@ -403,6 +421,8 @@ app.get("/", (req, res) => {
 app.listen(PORT, () => {
   console.log("[BOOT] Zalo config", {
     appId: ZALO_APP_ID,
+    secretLength: ZALO_APP_SECRET ? ZALO_APP_SECRET.length : 0,
+    secretPreview: maskSecret(ZALO_APP_SECRET),
     redirectUri: ZALO_REDIRECT_URI,
     pkceEnabled: true
   });
