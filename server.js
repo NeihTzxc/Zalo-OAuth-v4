@@ -105,17 +105,34 @@ function clearOauthCookies(res) {
 async function exchangeToken(code, codeVerifier) {
   const response = await axios.post(
     "https://oauth.zaloapp.com/v4/access_token",
-    null,
+    new URLSearchParams({
+      code,
+      app_id: ZALO_APP_ID,
+      grant_type: "authorization_code",
+      code_verifier: codeVerifier
+    }).toString(),
     {
-      params: {
-        app_id: ZALO_APP_ID,
-        app_secret: ZALO_APP_SECRET,
-        code,
-        code_verifier: codeVerifier,
-        grant_type: "authorization_code"
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        secret_key: ZALO_APP_SECRET
       }
     }
   );
+
+  // Old logic for reference:
+  // const response = await axios.post(
+  //   "https://oauth.zaloapp.com/v4/access_token",
+  //   null,
+  //   {
+  //     params: {
+  //       app_id: ZALO_APP_ID,
+  //       app_secret: ZALO_APP_SECRET,
+  //       code,
+  //       code_verifier: codeVerifier,
+  //       grant_type: "authorization_code"
+  //     }
+  //   }
+  // );
 
   return response.data;
 }
