@@ -215,13 +215,24 @@ function renderTestPage() {
  */
 app.get("/zalo/auth", (req, res) => {
   if (!ZALO_APP_ID || !ZALO_REDIRECT_URI) {
-    console.log("ZALO_REDIRECT_URI: ", ZALO_REDIRECT_URI)
+    console.log("[ZALO AUTH] Missing config", {
+      ZALO_APP_ID,
+      ZALO_REDIRECT_URI
+    });
     return res.status(500).json({
       message: "Missing ZALO_APP_ID or ZALO_REDIRECT_URI in .env"
     });
   }
 
-  res.redirect(getZaloAuthUrl());
+  const authUrl = getZaloAuthUrl();
+
+  console.log("[ZALO AUTH] Request received", {
+    appId: ZALO_APP_ID,
+    redirectUri: ZALO_REDIRECT_URI,
+    authUrl
+  });
+
+  res.redirect(authUrl);
 });
 
 /**
@@ -276,5 +287,10 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
+  console.log("[BOOT] Zalo config", {
+    appId: ZALO_APP_ID,
+    redirectUri: ZALO_REDIRECT_URI,
+    authUrl: ZALO_APP_ID && ZALO_REDIRECT_URI ? getZaloAuthUrl() : null
+  });
   console.log(`Server running at http://localhost:${PORT}`);
 });
