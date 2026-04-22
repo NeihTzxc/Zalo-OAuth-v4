@@ -215,6 +215,7 @@ function renderTestPage() {
  */
 app.get("/zalo/auth", (req, res) => {
   if (!ZALO_APP_ID || !ZALO_REDIRECT_URI) {
+    console.log("ZALO_REDIRECT_URI: ", ZALO_REDIRECT_URI)
     return res.status(500).json({
       message: "Missing ZALO_APP_ID or ZALO_REDIRECT_URI in .env"
     });
